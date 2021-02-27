@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Admin": {
+      "commandName": "Project",
+      "commandLineArgs": "--start-browser"
+    }
+  }
+}

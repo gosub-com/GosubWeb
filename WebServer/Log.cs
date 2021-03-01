@@ -6,49 +6,100 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
 
-namespace Gosub.Http
+namespace Gosub.Web
 {
 
+    /// <summary>
+    /// Web server log files.
+    /// </summary>
     static public class Log
     {
         static QueueList<string> mLog = new QueueList<string>();
 
         /// <summary>
+        /// Use Level to index
+        /// </summary>
+        static readonly string[] LevelNames = new string[] { "DEBUG", " INFO", "ERROR" };
+
+        public enum Level
+        {
+            Debug,
+            Info,
+            Error
+        }
+
+        /// <summary>
         /// Default: Write to console when debugger is attached
         /// </summary>
-        static public bool WriteToConsole { get; set; } = Debugger.IsAttached;
+        static public Level WriteToConsole { get; set; } = Debugger.IsAttached ? Level.Debug : Level.Info;
+
+        /// <summary>
+        /// Number to keep in memory for quick recall
+        /// </summary>
         static public int MaxEntries { get; set; } = 1000;
 
         static Log()
         {
-            Write("*** STARTING LOG ***");
+            Info("*** STARTING LOG ***");
         }
 
-        static public void Write(string message, [CallerLineNumber]int lineNumber=0, [CallerFilePath]string fileName="", [CallerMemberName]string memberName="")
+        /// <summary>
+        /// Log an error
+        /// </summary>
+        static public void Error(string message,
+            Exception exception = null,
+            [CallerLineNumber] int lineNumber = -1,
+            [CallerFilePath] string fileName = "",
+            [CallerMemberName] string memberName = "")
         {
+            Write(Level.Error, message, exception, lineNumber, fileName, memberName);
+        }
+
+        /// <summary>
+        /// Log info
+        /// </summary>
+        static public void Info(string message,
+            Exception exception = null,
+            [CallerLineNumber]int lineNumber = -1,
+            [CallerFilePath]string fileName = "",
+            [CallerMemberName]string memberName = "")
+        {
+            Write(Level.Info, message, exception, lineNumber, fileName, memberName);
+        }
+
+        /// <summary>
+        /// Log debug info
+        /// </summary>
+        static public void Debug(string message,
+            Exception exception = null,
+            [CallerLineNumber] int lineNumber = -1,
+            [CallerFilePath] string fileName = "",
+            [CallerMemberName] string memberName = "")
+        {
+            Write(Level.Debug, message, exception, lineNumber, fileName, memberName);
+        }
+
+        static void Write(Level level,  string message, Exception exception,
+            int lineNumber, string fileName, string memberName)
+        {
+            message = $"{DateTime.Now.ToString("yyyy-MM-dd, HH:mm:ss.fff")}, {LevelNames[(int)level]}: {message}";
             if (lineNumber > 0)
-                message = "\"" + message + "\", " + Path.GetFileName(fileName) + " " + lineNumber + " " + memberName + "()";
-            Add(message);
+                message += $" [{Path.GetFileName(fileName)}: {lineNumber}, {memberName}]";
+            if (exception != null)
+                message += $", \"{exception.Message}\", {exception.GetType().Name}, STACK {exception.StackTrace}";
+            Add(level, message);
         }
 
-        static public void Write(string message, Exception exception, [CallerLineNumber]int lineNumber = -1, [CallerFilePath]string fileName = "", [CallerMemberName]string memberName = "")
+        static void Add(Level level, string message)
         {
-            if (lineNumber > 0)
-                message = "\"" + message + "\", " + Path.GetFileName(fileName) + " " + lineNumber + " " + memberName + "()";
-            Add(message + ", \"" + exception.Message + "\", " + exception.GetType().Name +  ", STACK " + exception.StackTrace);
-        }
-
-        static void Add(string message)
-        {
-            message = DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss.fff") + " - " + message;
             lock (mLog)
             {
                 mLog.Enqueue(message);
                 if (mLog.Count > MaxEntries)
                     mLog.Dequeue();
             }
-            if (WriteToConsole)
-                Debug.WriteLine(message);
+            if (level >= WriteToConsole)
+                Console.WriteLine(message);
         }
 
         static public string GetAsString(int maxLines)

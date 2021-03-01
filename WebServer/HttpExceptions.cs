@@ -1,34 +1,42 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using System.Runtime.CompilerServices;
 
-namespace Gosub.Http
+namespace Gosub.Web
 {
     /// <summary>
-    /// Throw this exception if there is a problem.  Set keepConnectionOpen to true
-    /// if the persistent TCP connection can process another request.
-    /// Server error message text (i.e. 500's) is logged, but not sent
-    /// back to the client (only "SERVER ERROR" is displayed)
-    /// Client error message text (i.e. 400's) is sent back to the client
+    /// Throw this exception if there is a problem processing the request.
+    /// The log will contain an error with file name and line number.
+    /// Stack trace is optional, pass stackTrace = true.
     /// </summary>
-    public class HttpException : Exception
+    public class HttpServerException : Exception
     {
-        public int Code { get; }
-        public bool KeepConnectionOpen { get; }
-
-        public HttpException(int code, string message, bool keepConnectionOpen)
-            : base(message)
+        public readonly bool LogStackTrace;
+        public readonly int LineNumber;
+        public readonly string FileName;
+        public readonly string MemberName;
+        public HttpServerException(string message, bool stackTrace = false,
+            [CallerLineNumber] int lineNumber = -1,
+            [CallerFilePath] string fileName = "",
+            [CallerMemberName] string memberName = "")
+            : base(message) 
         {
-            Code = code;
-            KeepConnectionOpen = keepConnectionOpen;
+            LogStackTrace = stackTrace;
+            LineNumber = lineNumber;
+            FileName = fileName;
+            MemberName = memberName;
         }
+    }
 
-        public HttpException(int code, string message)
-            : this(code, message, false)
-        {
-        }
+    /// <summary>
+    /// Generate an HTTP client error 400 and closes the connection.
+    /// This is only logged in debug mode since it is expected based on user input.
+    /// </summary>
+    public class HttpProtocolException : Exception
+    {
+        public readonly int Code;
+        public HttpProtocolException(string message, int code = 400) 
+            : base(message) { Code = code; }
     }
 
 }

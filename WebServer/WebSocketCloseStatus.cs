@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace Gosub.Http
+namespace Gosub.Web
 {
     public enum WebSocketCloseStatus
     {

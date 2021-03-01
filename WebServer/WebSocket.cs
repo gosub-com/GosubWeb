@@ -6,7 +6,7 @@ using System.IO;
 using System.Diagnostics;
 using System.Security.Cryptography;
 
-namespace Gosub.Http
+namespace Gosub.Web
 {
     /// <summary>
     /// RFC 6455: Implement websocket protocol
@@ -62,12 +62,12 @@ namespace Gosub.Http
             var request = context.Request;
             var requestProtocol = request.Headers["sec-websocket-protocol"]; // TBD: Split "," separated list
             if (protocol != requestProtocol)
-                throw new HttpException(400, "Invalid websocket protocol.  Client requested '" + requestProtocol + "', server accepted '" + protocol + "'");
+                throw new HttpProtocolException("Invalid websocket protocol.  Client requested '" + requestProtocol + "', server accepted '" + protocol + "'");
 
             // RFC 6455, 4.2.1 and 4.2.2
             string key = request.Headers["sec-websocket-key"];
             if (key == "")
-                throw new HttpException(400, "Websocket key not sent by client");
+                throw new HttpProtocolException("Websocket key not sent by client");
             string keyHash;
             using (var sha = SHA1.Create())
                 keyHash = Convert.ToBase64String(sha.ComputeHash(Encoding.UTF8.GetBytes(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")));
@@ -117,7 +117,7 @@ namespace Gosub.Http
                     // Eat rest of the message
                     while (!result.EndOfMessage && !cancellationToken.IsCancellationRequested)
                         result = await ReceiveAsync(bufferSeg, cancellationToken);
-                    throw new HttpException(400, "Websocket: Message too long");
+                    throw new HttpProtocolException("Websocket: Message too long");
                 }
                 stream.Write(mReadBuffer, 0, result.Count);
                 cancellationToken.ThrowIfCancellationRequested();
@@ -159,16 +159,16 @@ namespace Gosub.Http
             if (mReadMessageType == WebSocketMessageType.Close)
             {
                 if (mReadFrameOffset != mReadFrameLength || !mReadFinal)
-                    throw new HttpException(400, "Websocket: Close message cannot be fragmented, must be < 126 bytes, and must be final message");
+                    throw new HttpProtocolException("Websocket: Close message cannot be fragmented, must be < 126 bytes, and must be final message");
                 if (count < 2)
-                    throw new HttpException(400, "Websocket: Close message must contain status");
+                    throw new HttpProtocolException("Websocket: Close message must contain status");
 
                 return new WebSocketReceiveResult(0, WebSocketMessageType.Close, true,
                     (WebSocketCloseStatus)(buffer.Array[buffer.Offset] * 256 + buffer.Array[buffer.Offset + 1]),
                     Encoding.UTF8.GetString(buffer.Array, buffer.Offset + 2, count - 2));
             }
             if (mReadMessageType != WebSocketMessageType.Text && mReadMessageType != WebSocketMessageType.Binary)
-                throw new HttpException(500, "Websocket message type must be Text or Binary");  // This should never happen
+                throw new HttpServerException("Websocket message type must be Text or Binary");  // This should never happen
 
             return new WebSocketReceiveResult(count, mReadMessageType, mReadFrameOffset == mReadFrameLength && mReadFinal);
         }
@@ -185,9 +185,9 @@ namespace Gosub.Http
             mReadFrameLength = mReadHeaderBuffer[1] & 0x7F;
             mReadFrameOffset = 0;
             if ((b & 0x70) != 0)
-                throw new HttpException(400, "Websocket: Invalid control byte");
+                throw new HttpProtocolException("Websocket: Invalid control byte");
             if ((mReadHeaderBuffer[1] & 0x80) == 0)
-                throw new HttpException(400, "Websocket: Invalid packet, need masking");
+                throw new HttpProtocolException("Websocket: Invalid packet, need masking");
 
             // Packet length
             int extra = 4;
@@ -211,7 +211,7 @@ namespace Gosub.Http
                 index = 8;
                 mReadFrameLength = (mReadHeaderBuffer[4] << 24) + (mReadHeaderBuffer[5] << 16) + (mReadHeaderBuffer[6] << 8) + mReadHeaderBuffer[7];
                 if (mReadFrameLength < 0 || mReadHeaderBuffer[0] != 0 || mReadHeaderBuffer[1] != 0 || mReadHeaderBuffer[2] != 0 || mReadHeaderBuffer[3] != 0)
-                    throw new HttpException(400, "Websocket: Frame too long");
+                    throw new HttpProtocolException("Websocket: Frame too long");
             }
             // Masking
             Array.Copy(mReadHeaderBuffer, index, mReadMask, 0, 4);
@@ -223,7 +223,7 @@ namespace Gosub.Http
             {
                 case OpCode.Continue:
                     if (mReadMessageType == WebSocketMessageType.Close)
-                        throw new HttpException(400, "Websocket: Client sent data after connection was closed, or the first packet was not Text or Binary");
+                        throw new HttpProtocolException("Websocket: Client sent data after connection was closed, or the first packet was not Text or Binary");
                     break;
                 case OpCode.Ping:
                     PingReceived = true;
@@ -242,14 +242,14 @@ namespace Gosub.Http
                     mReadMessageType = WebSocketMessageType.Binary;
                     break;
                 default:
-                    throw new HttpException(400, "Websocket: Invalid opcode: " + opCode);
+                    throw new HttpProtocolException("Websocket: Invalid opcode: " + opCode);
             }
         }
 
         public async Task CloseAsync(WebSocketCloseStatus closeStatus, string statusDescription, CancellationToken cancellationToken)
         {
             if (mState == WebSocketState.Closed || mState == WebSocketState.CloseSent)
-                throw new HttpException(500, "Websocket: Sent 'close' message after connection was already closed.  Connection state=" + mState);
+                throw new HttpServerException("Websocket: Sent 'close' message after connection was already closed.  Connection state=" + mState);
             mState = mState == WebSocketState.CloseReceived ? WebSocketState.Closed : WebSocketState.CloseSent;
 
             // Prepend two bytes for status
@@ -270,7 +270,7 @@ namespace Gosub.Http
             else if (messageType == WebSocketMessageType.Text)
                 opCode = OpCode.Text;
             else
-                throw new HttpException(500, "SendAsync: Invalid message type");
+                throw new HttpServerException("SendAsync: Invalid message type");
 
             int index = 0;
             mWriteHeaderBuffer[0] = (byte)((endOfMessage ? 0x80 : 0) | ((int)opCode & 0x0F));

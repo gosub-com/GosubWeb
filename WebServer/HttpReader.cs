@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using System.IO;
 using System.Threading;
 
-namespace Gosub.Http
+namespace Gosub.Web
 {
     /// <summary>
     /// An HTTP stream reader.  Do not dispose (the web server owns and re-uses these)
@@ -17,7 +17,6 @@ namespace Gosub.Http
 
         Stream mStream;
         CancellationToken mCancellationToken;
-        bool mSync;
         long mLength;
         long mPosition;
 
@@ -25,17 +24,17 @@ namespace Gosub.Http
         int mBufferLength;
         byte[] mBuffer;
 
-        internal HttpReader(Stream stream, CancellationToken cancellationToken, bool sync)
+        internal HttpReader(Stream stream, CancellationToken cancellationToken)
         {
             mStream = stream;
             mCancellationToken = cancellationToken;
-            mSync = sync;
         }
 
         public CancellationToken CancellationToken { get => mCancellationToken; }
         public long Length => mLength;
         public long Position => mPosition;
-        public int ReadTimeout { get => mStream.ReadTimeout; set => mStream.ReadTimeout = value; }
+
+        public bool InvalidProtocol { get; private set; }
 
         public async Task<int> ReadAsync(byte[] buffer, int offset, int count)
         {
@@ -53,10 +52,7 @@ namespace Gosub.Http
                 return length;
             }
             // Pass request to underlying stream
-            if (mSync)
-                length = mStream.Read(buffer, offset, count);
-            else
-                length = await mStream.ReadAsync(buffer, offset, count, mCancellationToken);
+            length = await mStream.ReadAsync(buffer, offset, count, mCancellationToken);
 
             mPosition += length;
             return length;
@@ -73,7 +69,7 @@ namespace Gosub.Http
             {
                 var length = await ReadAsync(buffer.Array, buffer.Offset + offset, buffer.Count - offset);
                 if (length == 0)
-                    throw new HttpException(400, "Unexpected end of stream");
+                    throw new HttpProtocolException("Unexpected end of stream");
                 offset += length;
             }
             return offset;
@@ -87,10 +83,10 @@ namespace Gosub.Http
 
         /// <summary>
         /// Called by the server to read the HTTP header into an internal buffer.
-        /// Returns an empty buffer if the connection is closed.
-        /// Throws an exception if there is an error.
+        /// Returns an empty buffer if the connection is closed or there is an
+        /// invalid header (doesn't start with an HTTP method, or header is too long)
         /// </summary>
-        internal async Task<ArraySegment<byte>> ReadHttpHeaderAsyncInternal()
+        internal async Task<ArraySegment<byte>> ScanHttpHeaderAsyncInternal()
         {
             // Create or shift buffer
             if (mBuffer == null)
@@ -102,24 +98,49 @@ namespace Gosub.Http
 
             // Wait for HTTP header
             int headerEndIndex = 0;
+            bool validHeaderVerb = false;
             while (!FindEndOfHttpHeaderIndex(ref headerEndIndex))
             {
-                int maxCount = mBuffer.Length - mBufferLength;
-                if (maxCount <= 0)
-                    throw new HttpException(400, "HTTP header is too long");
+                var readCount = mBuffer.Length - mBufferLength;
+                if (readCount <= 0)
+                {
+                    Log.Debug("HTTP header is too long");
+                    InvalidProtocol = true;
+                    return new ArraySegment<byte>();
+                }
 
-                int length;
-                if (mSync)
-                    length = mStream.Read(mBuffer, mBufferLength, maxCount);
-                else
-                    length = await mStream.ReadAsync(mBuffer, mBufferLength, maxCount, mCancellationToken);
+                var length = await mStream.ReadAsync(mBuffer, mBufferLength, readCount, mCancellationToken);
                 mBufferLength += length;
 
                 if (length == 0)
                 {
                     if (mBufferIndex != 0)
-                        throw new HttpException(400, "Connection closed after reading partial HTTP header");
+                    {
+                        Log.Debug("Connection closed after reading partial HTTP header");
+                        InvalidProtocol = true;
+                    }
                     return new ArraySegment<byte>();
+                }
+
+                // Quick check to make sure HTTP method is valid
+                const int MAX_METHOD_LENGTH = 8; // Including ' '
+                if (!validHeaderVerb && mBufferLength >= MAX_METHOD_LENGTH)
+                {
+                    if (mBuffer[0] == 22)
+                    {
+                        Log.Debug("Invalid HTTP method, got HTTPS on an HTTP port");
+                        InvalidProtocol = true;
+                        return new ArraySegment<byte>();
+                    }
+                    var headerIndex = new Span<byte>(mBuffer, 0, MAX_METHOD_LENGTH).IndexOf((byte)' ');
+                    if (headerIndex <= 2
+                        || !HttpRequest.ValidHttpMethod(mBuffer.AsciiToString(0, headerIndex)))
+                    {
+                        Log.Debug("Invalid HTTP method");
+                        InvalidProtocol = true;
+                        return new ArraySegment<byte>();
+                    }
+                    validHeaderVerb = true;
                 }
             }
 

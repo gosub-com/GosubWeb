@@ -6,7 +6,7 @@ using System.IO;
 using System.Net.Sockets;
 using System.Net;
 
-namespace Gosub.Http
+namespace Gosub.Web
 {
     public class HttpContext
     {
@@ -39,7 +39,7 @@ namespace Gosub.Http
         /// <summary>
         /// Called only by HttpServer, once per request
         /// </summary>
-        internal void ResetRequestInternal(HttpRequest request, HttpResponse response)
+        internal void SetRequestInternal(HttpRequest request, HttpResponse response)
         {
             mRequest = request;
             mResponse = response;
@@ -70,12 +70,12 @@ namespace Gosub.Http
             if (!mResponse.HeaderSent)
             {
                 if (contentLength < 0)
-                    throw new HttpException(500, "GetWriter: ContentLength must be >= zero");
+                    throw new HttpServerException("GetWriter: ContentLength must be >= zero");
                 mResponse.ContentLength = contentLength;
                 SetHttpHeader();
             }
             if (contentLength !=  mResponse.ContentLength)
-                throw new HttpException(500, "GetWriter: ContentLength cannot be changed once it is set");
+                throw new HttpServerException("GetWriter: ContentLength cannot be changed once it is set");
             return mWriter;
         }
 
@@ -86,11 +86,11 @@ namespace Gosub.Http
         public WebSocket AcceptWebSocket(string protocol)
         {
             if (!mRequest.IsWebSocketRequest)
-                throw new HttpException(500, "Websocket not allowed to accept a non-web socket request");
+                throw new HttpServerException("Websocket not allowed to accept a non-web socket request");
             if (mResponse.HeaderSent)
-                throw new HttpException(500, "Websocket cannot accept connection after http header was already sent");
+                throw new HttpServerException("Websocket cannot accept connection after http header was already sent");
             if (mWebSocket != null)
-                throw new HttpException(500, "Websocket connection was already accepted");
+                throw new HttpServerException("Websocket connection was already accepted");
 
             mTcpClient.NoDelay = true;
             mWebSocket = new WebSocket(this, protocol);
@@ -103,9 +103,9 @@ namespace Gosub.Http
         void SetHttpHeader()
         {
             if (mResponse.HeaderSent)
-                throw new HttpException(500, "SendHttpHeader: Http header already sent");
+                throw new HttpServerException("SendHttpHeader: Http header already sent");
             if (mResponse.ContentLength < 0)
-                throw new HttpException(500, "SendHttpHeader: ConentLength must be set before sending header");
+                throw new HttpServerException("SendHttpHeader: ConentLength must be set before sending header");
 
             // Connection: Close or keep-alive
             if (mResponse.Connection == "")
@@ -149,7 +149,7 @@ namespace Gosub.Http
         {
             if (!File.Exists(path))
             {
-                Log.Write("FILE NOT FOUND: " + path);
+                Log.Error("FILE NOT FOUND: " + path);
                 await SendResponseAsync("File not found: " + path, 404);
                 return;
             }
@@ -162,9 +162,9 @@ namespace Gosub.Http
             // Currently we require the sender to include 'Content-Length.
             // TBD: Fix this since it is not required by the HTTP protocol
             if (mRequest.ContentLength < 0)
-                throw new HttpException(411, "HTTP header did not contain 'Content-Length' which is required");
+                throw new HttpProtocolException("HTTP header did not contain 'Content-Length' which is required", 411);
             if (mRequest.ContentLength > maxLength)
-                throw new HttpException(413, "Content length is too large");
+                throw new HttpProtocolException("Content length is too large", 413);
 
             // Read specific number of bytes (TBD: Enforce timeout)
             var stream = GetReader();

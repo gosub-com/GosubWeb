@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using System.IO;
 using System.Threading;
 
-namespace Gosub.Http
+namespace Gosub.Web
 {
     /// <summary>
     /// An HTTP stream reader.  Do not dispose (the web server owns and re-uses these)
@@ -14,17 +14,15 @@ namespace Gosub.Http
     public class HttpWriter
     {
         Stream mStream;
-        bool mSync;
         CancellationToken mCancellationToken;
         long mLength;
         long mPosition;
         Task mPreWriteTask;
 
-        internal HttpWriter(Stream stream, CancellationToken cancellationToken, bool sync)
+        internal HttpWriter(Stream stream, CancellationToken cancellationToken)
         {
             mStream = stream;
             mCancellationToken = cancellationToken;
-            mSync = sync;
         }
 
         public CancellationToken CancellationToken { get => mCancellationToken; }
@@ -58,27 +56,17 @@ namespace Gosub.Http
             // Send data
             mPosition += count;
             if (mPosition > mLength)
-                throw new HttpException(500, "Request handler wrote too many bytes");
-            if (mSync)
-                mStream.Write(buffer, offset, count);
-            else
-                await mStream.WriteAsync(buffer, offset, count, mCancellationToken);
+                throw new HttpServerException("Request handler wrote too many bytes");
+
+            await mStream.WriteAsync(buffer, offset, count, mCancellationToken);
         }
 
         public async Task WriteAsync(Stream stream)
         {
             byte[] buffer = new byte[8192];
             int length;
-            if (mSync)
-            {
-                while ((length = stream.Read(buffer, 0, buffer.Length)) != 0)
-                    await WriteAsync(buffer, 0, length);
-            }
-            else
-            {
-                while ((length = await stream.ReadAsync(buffer, 0, buffer.Length, mCancellationToken)) != 0)
-                    await WriteAsync(buffer, 0, length);
-            }
+            while ((length = await stream.ReadAsync(buffer, 0, buffer.Length, mCancellationToken)) != 0)
+                await WriteAsync(buffer, 0, length);
         }
 
         public async Task FlushAsync()
@@ -88,11 +76,7 @@ namespace Gosub.Http
                 await mPreWriteTask;
                 mPreWriteTask = null;
             }
-
-            if (mSync)
-                mStream.Flush();
-            else
-                await mStream.FlushAsync();
+            await mStream.FlushAsync();
         }
     }
 }

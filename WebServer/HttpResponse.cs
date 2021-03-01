@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace Gosub.Http
+namespace Gosub.Web
 {
     /// <summary>
     /// HTTP response header that is sent to the client.
@@ -60,7 +60,7 @@ namespace Gosub.Http
 
             if (mCookies != null)
                 foreach (var cookie in mCookies)
-                    header.Append("set-cookie: " + cookie.Key + "=" + cookie.Value);
+                    header.Append("set-cookie: " + cookie.Key + "=" + cookie.Value + CRLF);
 
             header.Append(CRLF);
             return header.ToString();

@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace Gosub.Http
+namespace Gosub.Web
 {
     /// <summary>
     /// Quickie class to make it easier to use string dictionary.  No exceptions
@@ -30,29 +30,23 @@ namespace Gosub.Http
         /// <summary>
         /// Return the value for key or the defaultValue if not found
         /// </summary>
-        public string this[string key, string defaultValue]
+        public string Get(string key, string defaultValue = "")
         {
-            get
-            {
-                if (!TryGetValue(key, out string value))
-                    value = defaultValue;
-                return value;
-            }
+            if (!TryGetValue(key, out string value))
+                value = defaultValue;
+            return value;
         }
 
         /// <summary>
         /// Return the value for key or the defaultValue if not found or not convertable to long
         /// </summary>
-        public long this[string key, long defaultValue]
+        public long Get(string key, long defaultValue)
         {
-            get
-            {
-                if (!TryGetValue(key, out string stringValue))
-                    return defaultValue;
-                if (!long.TryParse(stringValue, out long longValue))
-                    return defaultValue;
-                return longValue;
-            }
+            if (!TryGetValue(key, out string stringValue))
+                return defaultValue;
+            if (!long.TryParse(stringValue, out long longValue))
+                return defaultValue;
+            return longValue;
         }
     }
 }

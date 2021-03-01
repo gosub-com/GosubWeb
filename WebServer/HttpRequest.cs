@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using System.Net.Sockets;
 using System.IO;
 
-namespace Gosub.Http
+namespace Gosub.Web
 {
     /// <summary>
     /// HTTP request header received from client
@@ -19,11 +19,21 @@ namespace Gosub.Http
         public int ProtocolVersionMajor;
         public int ProtocolVersionMinor;
 
-        // Target resource
+        /// <summary>
+        /// Path of request excluding query
+        /// </summary>
         public string Path = "";
+
+        /// <summary>
+        /// File extension excluding ".", lower case.
+        /// </summary>
+        public string Extension = "";
+
+
         public string Host = "";
         public string HostNoPort = "";
-        public string Extension = ""; // Excluding the "."
+
+        
         public string Fragment = "";
         public HttpDict Query = new HttpDict();
         public HttpDict Cookies = new HttpDict();
@@ -31,9 +41,9 @@ namespace Gosub.Http
         // Common Headers
         public HttpDict Headers = new HttpDict();
         public long ContentLength;
-        public bool IsWebSocketRequest;
+        public bool IsWebSocketRequest { get; private set;  }
 
-        static Dictionary<string, bool> sMethods = new Dictionary<string, bool>()
+        static readonly Dictionary<string, bool> sMethods = new Dictionary<string, bool>()
         {
             { "GET", true },
             { "HEAD", true },
@@ -45,6 +55,12 @@ namespace Gosub.Http
             { "TRACE", true }
         };
 
+        public static bool ValidHttpMethod(string method)
+        {
+            return sMethods.ContainsKey(method);
+        }
+
+
         public static HttpRequest Parse(ArraySegment<byte> buffer)
         {
             var request = new HttpRequest();
@@ -52,16 +68,16 @@ namespace Gosub.Http
 
             var header = Encoding.UTF8.GetString(buffer.Array, buffer.Offset, buffer.Count).Split(new string[] { "\r\n" }, StringSplitOptions.RemoveEmptyEntries);
             if (header.Length == 0)
-                throw new HttpException(400, "Invalid request: Empty");
+                throw new HttpProtocolException("Invalid request: Empty");
 
             var headerParts = header[0].Split(' ');
             if (headerParts.Length != 3)
-                throw new HttpException(400, "Invalid request line: Needs 3 parts separated by space");
+                throw new HttpProtocolException("Invalid request line: Needs 3 parts separated by space");
 
             // Parse method
             request.Method = headerParts[0];
             if (!sMethods.ContainsKey(request.Method))
-                throw new HttpException(400, "Invalid request line: unknown method");
+                throw new HttpProtocolException("Invalid request line: unknown method");
 
             // Parse URL Fragment
             var target = headerParts[1];
@@ -87,21 +103,21 @@ namespace Gosub.Http
             request.Extension = "";
             int extensionIndex = target.LastIndexOf('.');
             if (extensionIndex >= 0 && target.IndexOf('/', extensionIndex) < 0)
-                request.Extension = target.Substring(extensionIndex + 1);
+                request.Extension = target.Substring(extensionIndex + 1).ToLower();
 
             // Parse protocol and version
             var protocolParts = headerParts[2].Split('/');
             if (protocolParts.Length != 2 || protocolParts[0].ToUpper() != "HTTP")
-                throw new HttpException(400, "Invalid request line: Unrecognized protocol.  Only HTTP is supported");
+                throw new HttpProtocolException("Invalid request line: Unrecognized protocol.  Only HTTP is supported");
 
             var versionParts = protocolParts[1].Split('.');
             if (versionParts.Length != 2
                     || !int.TryParse(versionParts[0], out request.ProtocolVersionMajor)
                     || !int.TryParse(versionParts[1], out request.ProtocolVersionMinor))
-                throw new HttpException(400, "Invalid request line: Protocol version format is incorrect (require #.#)");
+                throw new HttpProtocolException("Invalid request line: Protocol version format is incorrect (require #.#)");
 
             if (request.ProtocolVersionMajor != 1)
-                throw new HttpException(400, "Expecting HTTP version 1.#");
+                throw new HttpProtocolException("Expecting HTTP version 1.#");
 
             // Read header fields
             var headers = request.Headers;
@@ -111,12 +127,12 @@ namespace Gosub.Http
 
                 int index;
                 if ((index = fieldLine.IndexOf(':')) < 0)
-                    throw new HttpException(400, "Invalid header field: Missing ':'");
+                    throw new HttpProtocolException("Invalid header field: Missing ':'");
 
                 var key = fieldLine.Substring(0, index).Trim().ToLower();
                 var value = fieldLine.Substring(index + 1).Trim();
                 if (key == "")
-                    throw new HttpException(400, "Invalid header field: Missing key or value");
+                    throw new HttpProtocolException("Invalid header field: Missing key or value");
 
                 if (key == "cookie")
                     ParseCookie(value, request.Cookies);
@@ -126,7 +142,7 @@ namespace Gosub.Http
 
             // Parse well known header fields
             request.Headers = headers;
-            request.ContentLength = headers["content-length", -1];
+            request.ContentLength = headers.Get("content-length", -1);
             var host = headers["host"];
             request.Host = host;
             if (host.Contains(':'))
@@ -137,8 +153,8 @@ namespace Gosub.Http
             if (headers["connection"].ToLower().Contains("upgrade")
                 && headers["upgrade"].ToLower() == "websocket")
             {
-                if (headers["sec-websocket-version", 0] < 13)
-                    throw new HttpException(400, "Web socket request version must be >= 13");
+                if (headers.Get("sec-websocket-version", 0) < 13)
+                    throw new HttpProtocolException("Web socket request version must be >= 13");
                 request.IsWebSocketRequest = true;
             }
             return request;

@@ -107,13 +107,14 @@ namespace Gosub.Web
             if (mResponse.ContentLength < 0)
                 throw new HttpServerException("SendHttpHeader: ConentLength must be set before sending header");
 
-            // Connection: Close or keep-alive
+            // Connection: Close or keep-alive (or keep what the user set)
             if (mResponse.Connection == "")
             {
-                mResponse.Connection = "close";
-                var connection = mRequest.Headers["connection"].ToLower();
-                if (connection == "keep-alive" || mRequest.ProtocolVersionMinor >= 1 && connection != "close")
+                if (mRequest.Connection == "keep-alive"
+                        || mRequest.ProtocolVersionMinor >= 1 && mRequest.Connection != "close")
                     mResponse.Connection = "keep-alive";
+                else
+                    mResponse.Connection = "close";
             }
 
             // Good to go, reset streams

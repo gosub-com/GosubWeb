@@ -50,24 +50,15 @@ namespace Gosub.Web
         /// </summary>
         public HttpStats Stats { get { var t = mStats;  t.Time = DateTime.Now;  return t; } }
 
-
         /// <summary>
-        /// Start server on this listner
+        /// Start server on this listener (ssl if certificate is not null)
         /// </summary>
-        public void Start(TcpListener listener)
-        {
-            Start(listener, null);
-        }
-
-        /// <summary>
-        /// Start ssl server on this listener
-        /// </summary>
-        public async void Start(TcpListener listener, X509Certificate certificate)
+        public async Task Start(TcpListener listener, X509Certificate certificate = null)
         {
             if (certificate == null)
-                Log.Info($"HTTP web server running on port {listener.LocalEndpoint}");
+                Log.Info($"Starting HTTP web server running on port {listener.LocalEndpoint}");
             else
-                Log.Info($"HTTPS web server running on port {listener.LocalEndpoint}, cert={certificate.Subject}");
+                Log.Info($"Starting HTTPS web server running on port {listener.LocalEndpoint}, cert={certificate.Subject}");
 
             listener.Start();
             lock (mLock)

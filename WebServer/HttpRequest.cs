@@ -32,6 +32,7 @@ namespace Gosub.Web
 
         public string Host = "";
         public string HostNoPort = "";
+        public string Connection = "";
 
         
         public string Fragment = "";
@@ -41,6 +42,7 @@ namespace Gosub.Web
         // Common Headers
         public HttpDict Headers = new HttpDict();
         public long ContentLength;
+        public string AcceptEncoding = "";
         public bool IsWebSocketRequest { get; private set;  }
 
         static readonly Dictionary<string, bool> sMethods = new Dictionary<string, bool>()
@@ -95,9 +97,11 @@ namespace Gosub.Web
                 target = target.Substring(0, queryIndex);
                 ParseQueryString(query, request.Query);
             }
-            // Remove trailing '/'
-            while (target.EndsWith("/") && target.Length != 1)
+            // Leading and trailing '/' (TBD: Make it faster later)
+            while (target.EndsWith("/"))
                 target = target.Substring(0, target.Length - 1);
+            while (target.StartsWith("/"))
+                target = target.Substring(1);
             request.Path = target;
 
             request.Extension = "";
@@ -131,26 +135,28 @@ namespace Gosub.Web
 
                 var key = fieldLine.Substring(0, index).Trim().ToLower();
                 var value = fieldLine.Substring(index + 1).Trim();
-                if (key == "")
-                    throw new HttpProtocolException("Invalid header field: Missing key or value");
 
-                if (key == "cookie")
-                    ParseCookie(value, request.Cookies);
-                else
-                    headers[key] = value;
+                switch (key)
+                {
+                    case "": throw new HttpProtocolException("Invalid header field: Missing key or value");
+                    case "cookie": ParseCookie(value, request.Cookies);  break;
+                    case "host": request.Host = value;  break;
+                    case "accept-encoding":  request.AcceptEncoding = value.ToLower();  break;
+                    case "content-length": long.TryParse(value, out request.ContentLength);  break;
+                    case "connection": request.Connection = value.ToLower(); break;
+                    default: headers[key] = value;  break;
+                }
             }
 
             // Parse well known header fields
             request.Headers = headers;
-            request.ContentLength = headers.Get("content-length", -1);
-            var host = headers["host"];
-            request.Host = host;
+            var host = request.Host;
             if (host.Contains(':'))
                 host = host.Substring(0, host.IndexOf(':'));
             request.HostNoPort = host;
 
             // Websocket connection?  RFC 6455, 4.2.1
-            if (headers["connection"].ToLower().Contains("upgrade")
+            if (request.Connection.Contains("upgrade")
                 && headers["upgrade"].ToLower() == "websocket")
             {
                 if (headers.Get("sec-websocket-version", 0) < 13)

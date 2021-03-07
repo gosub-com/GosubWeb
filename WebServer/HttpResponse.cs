@@ -33,6 +33,9 @@ namespace Gosub.Web
         public HttpDict Headers => mHeaders == null ? mHeaders = new HttpDict() : mHeaders;
         public HttpDict Cookies => mCookies == null ? mCookies = new HttpDict() : mCookies;
 
+        public string HeaderServer = "gosub";
+        public string ContentEncoding = "";
+
 
         void CheckSent()
         {
@@ -61,6 +64,10 @@ namespace Gosub.Web
             if (mCookies != null)
                 foreach (var cookie in mCookies)
                     header.Append("set-cookie: " + cookie.Key + "=" + cookie.Value + CRLF);
+
+            header.Append("server:" + HeaderServer + CRLF);
+            if (ContentEncoding != "")
+                header.Append("content-encoding:" + ContentEncoding + CRLF);
 
             header.Append(CRLF);
             return header.ToString();

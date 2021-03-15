@@ -15,8 +15,8 @@ namespace GosubAdmin
     class Program
     {
         static readonly string PUBLIC_DIRECTORY = Path.Combine(AppContext.BaseDirectory, "www");
-        static readonly string CERTIFICATE_PEM_FILE = "your.pem";
-        static readonly string CERTIFICATE_KEY_FILE = "your.key";
+        static readonly string CERTIFICATE_PEM_FILE = "certificate.pem";
+        static readonly string CERTIFICATE_KEY_FILE = "certificate.key";
         const int ADMIN_PORT = 8059;
 
         static async Task Main(string[] args)
@@ -27,50 +27,52 @@ namespace GosubAdmin
                 if (v == "--start-browser")
                     startBrowser = true;
 
-            var staticFileServer = new StaticFileServer(PUBLIC_DIRECTORY, "");
+            var staticFileServer = new StaticFileServer();
+            staticFileServer.SetRoot(PUBLIC_DIRECTORY, "");
             var adminApi = new AdminApi();
 
-            // Read TLS certificates
-            X509Certificate2 tlsCertificate = null;
+            var redirect = new Redirect();
+            //redirect.UpgradeInsecure = true;
+
+            // Setup server
+            var mHttpServer = new HttpServer();
+            mHttpServer.HttpHandler += async (context) =>
+            {
+                if (await redirect.RedirectRequest(context))
+                    return;
+
+                // Do some json API's (these should probably require login with admin privilege)
+                if (context.Request.Path == "admin/api/log")
+                {
+                    await context.SendResponseAsync(Log.GetAsString(200));
+                    return;
+                }
+                if (context.Request.Path == "admin/api/stats")
+                {
+                    await context.SendResponseAsync(JsonConvert.SerializeObject(mHttpServer.Stats));
+                    return;
+                }
+
+                // Pass everything else to static file server
+                await staticFileServer.SendStaticFile(context);
+            };
+
+            // Start HTTP ports
+            Start(mHttpServer, new TcpListener(IPAddress.Any, ADMIN_PORT));
+            Start(mHttpServer, new TcpListener(IPAddress.Any, 80));
+
+            // Start HTTPS ports
             try
             {
                 var pem = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, CERTIFICATE_PEM_FILE));
                 var key = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, CERTIFICATE_KEY_FILE));
-                tlsCertificate = X509Certificate2.CreateFromPem(pem, key);
+                var tlsCertificate = X509Certificate2.CreateFromPem(pem, key);
+                Start(mHttpServer, new TcpListener(IPAddress.Any, 8058), tlsCertificate);
+                Start(mHttpServer, new TcpListener(IPAddress.Any, 443), tlsCertificate);
             }
             catch (Exception ex)
             {
                 Log.Error($"Error loading TLS certificate, will not start HTTPS servers: {ex.Message}");
-            }
-
-
-            // Setup server
-            var mHttpServer = new HttpServer();
-            mHttpServer.HttpHandler += (context) =>
-            {
-                // Uparade to SSL (TBD: This will be moved to redirect module)
-                if (!context.IsSecure && context.LocalEndPoint is IPEndPoint ip && ip.Port == 80)
-                {
-                    context.Response.Headers["location"] = "https://" + context.Request.HostNoPort + "/" + context.Request.Path;
-                    return context.SendResponseAsync("", 301);
-                }
-
-                // Do some json API's (these should probably require login with admin privilege)
-                if (context.Request.Path == "admin/api/log")
-                    return context.SendResponseAsync(Log.GetAsString(200));
-                if (context.Request.Path == "admin/api/stats")
-                    return context.SendResponseAsync(JsonConvert.SerializeObject(mHttpServer.Stats));
-
-                // Pass everything else to static file server
-                return staticFileServer.SendStaticFile(context);
-            };
-
-            Start(mHttpServer, new TcpListener(IPAddress.Any, ADMIN_PORT));
-            Start(mHttpServer, new TcpListener(IPAddress.Any, 80));
-            if (tlsCertificate != null)
-            {
-                Start(mHttpServer, new TcpListener(IPAddress.Any, 8058), tlsCertificate);
-                Start(mHttpServer, new TcpListener(IPAddress.Any, 443), tlsCertificate);
             }
 
             if (startBrowser)

@@ -37,9 +37,17 @@ namespace Gosub.Web
         internal long LengthInternal { get => mLength; set => mLength = value; }
         internal void SetPreWriteTaskInternal(Task task) { mPreWriteTask = task; }
 
-        public Task WriteAsync(byte []buffer)
+        public Task WriteAsync(byte[] buffer)
         {
             return WriteAsync(buffer, 0, buffer.Length);
+        }
+
+        public async Task WriteAsync(Stream stream)
+        {
+            byte[] buffer = new byte[8192];
+            int length;
+            while ((length = await stream.ReadAsync(buffer, 0, buffer.Length, mCancellationToken)) != 0)
+                await WriteAsync(buffer, 0, length);
         }
 
         public async Task WriteAsync(byte[] buffer, int offset, int count)
@@ -56,17 +64,17 @@ namespace Gosub.Web
             // Send data
             mPosition += count;
             if (mPosition > mLength)
-                throw new HttpServerException("Request handler wrote too many bytes");
+                throw new HttpProtocolException("Request handler wrote too many bytes");
 
-            await mStream.WriteAsync(buffer, offset, count, mCancellationToken);
-        }
-
-        public async Task WriteAsync(Stream stream)
-        {
-            byte[] buffer = new byte[8192];
-            int length;
-            while ((length = await stream.ReadAsync(buffer, 0, buffer.Length, mCancellationToken)) != 0)
-                await WriteAsync(buffer, 0, length);
+            try
+            {
+                await mStream.WriteAsync(buffer, offset, count, mCancellationToken);
+            }
+            catch (Exception ex)
+            {
+                // Instead of stack dump, intercept the broken pipe and re-issue the error
+                throw new HttpProtocolException($"Error writing to stream: {ex.Message}");
+            }
         }
 
         public async Task FlushAsync()
@@ -76,7 +84,15 @@ namespace Gosub.Web
                 await mPreWriteTask;
                 mPreWriteTask = null;
             }
-            await mStream.FlushAsync();
+            try
+            {
+                await mStream.FlushAsync();
+            }
+            catch (Exception ex)
+            {
+                // Instead of stack dump, intercept the broken pipe and re-issue the error
+                throw new HttpProtocolException($"Error flushing to stream: {ex.Message}");
+            }
         }
     }
 }

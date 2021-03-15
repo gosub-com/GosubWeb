@@ -31,7 +31,7 @@ namespace Gosub.Web
         /// <summary>
         /// Default: Write to console when debugger is attached
         /// </summary>
-        static public Level WriteToConsole { get; set; } = Level.Info;
+        static public Level WriteToConsole { get; set; } = Debugger.IsAttached ? Level.Debug : Level.Info;
 
         /// <summary>
         /// Number to keep in memory for quick recall
@@ -54,6 +54,7 @@ namespace Gosub.Web
         {
             Write(Level.Error, message, exception, lineNumber, fileName, memberName);
         }
+
 
         /// <summary>
         /// Log info

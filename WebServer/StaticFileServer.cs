@@ -9,10 +9,8 @@ using System.IO.Compression;
 namespace Gosub.Web
 {
     /// <summary>
-    /// Class to server static files from a root directory, and
-    /// optionally do server side includes, but only when
-    /// `TemplateFileExtensions` is set.  File names are case insensitive,
-    /// but the server will redirect them to the correctly cased URL.
+    /// Class to server static files from a root directory, and optionally
+    /// do server side includes, when  `TemplateFileExtensions` is set.
     /// </summary>
     public class StaticFileServer
     {
@@ -37,6 +35,8 @@ namespace Gosub.Web
         };
 
         object mLock = new object();
+        string mDefaultFileName = "index";
+        string mDefaultFileExtension = "html";
         string mTemplateStartString = "${{";
         string mTemplateEndString = "}}";
         string mTemplateFileExtensions = "";
@@ -47,17 +47,20 @@ namespace Gosub.Web
 
         class FileCache
         {
-            public string PathLower = ""; // As specified by URL, but in lower case
-            public string PathCase = "";
+            public string PathLower = ""; // As specified by HTTP URL, but in lower case
+            public string PathCase = ""; // As specified by HTTP URL
+            public string PathOs = "";  // On disk
+            public string Extension = "";
             public DateTime LastWriteTimeUtc;
+            public DateTime UpdatedTime;
             public string[] Dependencies = Array.Empty<string>();
-            public byte[] Cached; // Null if invalid or not loaded from disk
+            public byte[] Cached;
             public byte[] CachedGzip;
-            public override string ToString() { return PathLower; }
+            public override string ToString() { return PathCase; }
         }
 
 
-        public readonly string FileSystemRoot = "";
+        public string FileSystemRoot { get; private set;  } = "";
 
         /// <summary>
         /// When true (the default), re-write the browser URL to send them to
@@ -69,19 +72,24 @@ namespace Gosub.Web
         /// Non-template/non-compressable files are cached if they are under MaxCacheSize.
         /// Template and compressable files are cached regardless of size.
         /// </summary>
-        public int MaxCacheSize = 80000;
+        public int MaxCacheSize = 120000;
 
-        /// <summary>
-        /// Serve files from fileSystemRoot directory.  The request must
-        /// start with `webRoot`, which is then stripped from the request path.
-        /// Logs an error if the directory doesn't exist.
-        /// Use `TemplateFileExtensions` to process server side includes
-        /// in the file.
-        /// </summary>
-        public StaticFileServer(string fileSystemRoot, string webRoot)
+        public StaticFileServer()
         {
             TemplateFileExtensions = DEFAULT_TEMPLATE_FILE_EXTENSIONS;
             CompressedFileExtensions = DEFAULT_COMPRESSED_FILE_EXTENSIONS;
+        }
+
+        /// <summary>
+        /// Set the file system root directory.
+        /// Throws exception if the directory doesn't exist or file
+        /// enumeration fails. WebRoot not implemented yet.
+        /// </summary>
+        public void SetRoot(string fileSystemRoot, string webRoot)
+        {
+            if (webRoot != "")
+                throw new Exception("webRoot not implemented yet");
+
             FileSystemRoot = Path.GetFullPath(fileSystemRoot);
             try
             {
@@ -98,6 +106,61 @@ namespace Gosub.Web
                 return;
             }
             Log.Info($"Serving {mFileCache.Count} files from '{FileSystemRoot}'");
+        }
+
+        void EnumerateFiles(string root)
+        {
+            var fileCache = new Dictionary<string, FileCache>();
+            EnumerateFilesRecurse(root);
+            lock (mLock)
+                mFileCache = fileCache;
+            return;
+
+            void EnumerateFilesRecurse(string dir)
+            {
+                foreach (var d in Directory.EnumerateDirectories(dir))
+                    EnumerateFilesRecurse(d);
+                foreach (var path in Directory.EnumerateFiles(dir))
+                {
+                    var extension = Path.GetExtension(path).ToLower().Replace(".", "");
+                    var fc = new FileCache();
+                    var fi = new FileInfo(path);
+                    fc.LastWriteTimeUtc = fi.LastWriteTimeUtc;
+                    fc.PathOs = path;
+                    fc.Extension = extension;
+
+                    // Account for default extension and default file name
+                    var p = path;
+                    if (extension == DefaultFileExtension)
+                        p = path.Substring(0, p.Length - extension.Length - 1);
+                    if (Path.GetFileNameWithoutExtension(p).ToLower() == DefaultFileName)
+                        p = path.Substring(0, Math.Max(0, p.Length - DefaultFileName.Length-1));
+                    fc.PathCase = Path.GetRelativePath(root, p).Replace("\\", "/");
+                    if (fc.PathCase == ".")
+                        fc.PathCase = "";
+                    fc.PathLower = fc.PathCase.ToLower();
+                    if (fileCache.TryGetValue(fc.PathLower, out var fcerror))
+                    {
+                        Log.Error($"Conflicting or duplicate names: '{fc.PathOs}' and '{fcerror.PathOs}'");
+                        continue;
+                    }
+                    fileCache[fc.PathLower] = fc;
+                }
+            }
+
+        }
+
+        void FlushCache()
+        {
+            lock (mLock)
+            {
+                foreach (var fi in mFileCache.Values)
+                {
+                    fi.Cached = null;
+                    fi.CachedGzip = null;
+                    fi.UpdatedTime = new DateTime();
+                }
+            }
         }
 
 
@@ -146,9 +209,9 @@ namespace Gosub.Web
                 {
                     mTemplateFileExtensions = value;
                     mTemplateFileExtensionsDict.Clear();
-                    FlushCache();
                     foreach (var extension in value.ToLower().Split(';'))
                         mTemplateFileExtensionsDict[extension] = true;
+                    FlushCache();
                 }
             }
         } 
@@ -167,62 +230,36 @@ namespace Gosub.Web
                 {
                     mCompressedFileExtensions = value;
                     mCompressedFileExtensionsDict.Clear();
-                    FlushCache();
                     foreach (var extension in value.ToLower().Split(';'))
                         mCompressedFileExtensionsDict[extension] = true;
+                    FlushCache();
                 }
             }
         }
 
-        /// <summary>
-        /// Call this if anything on the file system changes.
-        /// </summary>
-        public void FlushCache(bool reEnumerate = false)
+        public string DefaultFileName
         {
-            lock (mLock)
+            get { return mDefaultFileName; }
+            set
             {
-                if (reEnumerate)
-                {
-                    EnumerateFiles(FileSystemRoot);
-                }
-                else
-                {
-                    foreach (var fi in mFileCache.Values)
-                    {
-                        fi.Cached = null;
-                    }
-                }
+                if (value == mDefaultFileName)
+                    return;
+                mDefaultFileName = value.ToLower();
+                EnumerateFiles(FileSystemRoot);
             }
         }
-        void EnumerateFiles(string root)
+
+        public string DefaultFileExtension
         {
-            foreach (var dir in Directory.EnumerateDirectories(root))
-                EnumerateFiles(dir);
-            foreach (var path in Directory.EnumerateFiles(root))
-                AddFile(path);
-            return;
-
-            void AddFile(string path)
+            get { return mDefaultFileExtension; }
+            set
             {
-                var pathLower = path.ToLower();
-                var fi = new FileInfo(path);
-                lock (mLock)
-                {
-                    if (!mFileCache.TryGetValue(pathLower, out var fc))
-                        fc = new FileCache();
-                    fc.PathLower = pathLower;
-                    fc.PathCase = path;
-                    if (fi.LastWriteTimeUtc != fc.LastWriteTimeUtc)
-                    {
-                        fc.Cached = null;
-                        fc.CachedGzip = null;
-                    }
-                    fc.LastWriteTimeUtc = fi.LastWriteTimeUtc;
-                    mFileCache[pathLower] = fc;
-                }
+                if (value == mDefaultFileExtension)
+                    return;
+                mDefaultFileExtension = value.ToLower();
+                EnumerateFiles(FileSystemRoot);
             }
         }
-
 
 
         /// <summary>
@@ -231,8 +268,6 @@ namespace Gosub.Web
         public async Task SendStaticFile(HttpContext context)
         {
             var request = context.Request;
-            Log.Debug($"Load {context.Request.Path}");
-
             if (request.Method != "GET")
             {
                 await context.SendResponseAsync("Invalid HTTP request: Only GET method is allowed for serving", 405);
@@ -240,83 +275,80 @@ namespace Gosub.Web
             }
 
             // Check illegal file names (outside of the public directory, invisible files, windows path, etc.)
-            string path = request.Path;
-            if (path.Contains("..") || path.Contains("/.") || path.Contains("//") || path.Contains("\\"))
+            string path = request.PathLower;
+            if (path.Contains("..") || path.StartsWith(".") || path.Contains("/.") || path.Contains("//") || path.Contains("\\"))
             {
                 await context.SendResponseAsync("Invalid Request: File name is invalid", 400);
                 return;
             }
 
-            // Choose "index.html" if no name is given
-            var extension = request.Extension;
-            if (path.Length == 0)
-            {
-                path = "index.html";
-                extension = "html";
-            }
+            var fileCache = GetFile(path, request.Extension);
 
-            if (MimeTypes.TryGetValue(extension, out string contentType))
+            if (fileCache == null)
+            {
+                Log.Debug($"File not found '{context.Request.Path}', referer='{context.Request.Referer}'");
+                await context.SendResponseAsync("File not found: " + path, 404);
+                return;
+            }
+            if (MimeTypes.TryGetValue(fileCache.Extension, out string contentType))
                 context.Response.ContentType = contentType;
 
-            var (file, isGzipped) = GetFile(path, extension, context.Request.AcceptEncoding.Contains("gzip"));
-            if (file != null)
+            if (fileCache.Cached != null)
             {
-                if (isGzipped)
+                bool gzipped = fileCache.CachedGzip != null && context.Request.AcceptEncoding.Contains("gzip");
+                if (gzipped)
                     context.Response.ContentEncoding = "gzip";
-                await context.SendResponseAsync(file);
+                await context.SendResponseAsync(gzipped ? fileCache.CachedGzip : fileCache.Cached);
+                Log.Debug($"Serving '{context.Request.Path}' (cache, {(gzipped ? "compressed" : "uncompressed")})");
                 return;
             }
 
-            var fsPath = Path.Combine(FileSystemRoot, path);
-            if (!File.Exists(fsPath))
+            if (!File.Exists(fileCache.PathOs))
             {
+                Log.Debug($"File not found '{context.Request.Path}', referer='{context.Request.Referer}'");
                 await context.SendResponseAsync("File not found: " + path, 404);
                 return;
             }
 
-            using (var stream = File.OpenRead(fsPath))
+            Log.Debug($"Serving '{context.Request.Path}' (disk)");
+            using (var stream = File.OpenRead(fileCache.PathOs))
                 await context.GetWriter(stream.Length).WriteAsync(stream);
         }
 
-        /// <summary>
-        /// Checks for the file in the cache, and returns it.  If not in cache,
-        /// loads it from disk and does template stuff.  Some big files never
-        /// enter the cache, so returns NULL in that case.  If NULL, you must
-        /// serve the file from disk.  The path is the full path on the file system.
-        /// Returns (file, isGZipped), where file can be NULL
-        /// </summary>
-        (byte [], bool) GetFile(string path, string extension, bool allowGzip)
+        FileCache GetFile(string path, string extension)
         {
             var pathLower = path.ToLower();
             var isTemplate = false;
             var isCompressable = false;
+            FileCache fileCache;
             lock (mLock)
             {
-                if (mFileCache.TryGetValue(pathLower, out var fcc))
-                {
-                    // Cache hit
-                    // TBD: Periodically check to see if file on disk was changed.
-                    if (fcc.CachedGzip != null && allowGzip)
-                        return (fcc.CachedGzip, true);
-                    if (fcc.Cached != null)
-                        return (fcc.Cached, false);
-                }
-                isTemplate = mTemplateFileExtensionsDict.ContainsKey(extension);
-                isCompressable = mCompressedFileExtensionsDict.ContainsKey(extension);
+                // Not found, or cache hit
+                if (!mFileCache.TryGetValue(pathLower, out fileCache))
+                    return null;
+                if (fileCache.UpdatedTime != new DateTime())
+                    return fileCache;
+
+                isTemplate = mTemplateFileExtensionsDict.ContainsKey(fileCache.Extension);
+                isCompressable = mCompressedFileExtensionsDict.ContainsKey(fileCache.Extension);
             }
 
-            var fsPath = Path.Combine(FileSystemRoot, path);
-            if (!File.Exists(fsPath))
-                return (null, false);
-            var fi = new FileInfo(fsPath);
+            if (!File.Exists(fileCache.PathOs))
+                return null;
+            var fi = new FileInfo(fileCache.PathOs);
             if (!isTemplate && !isCompressable && fi.Length > MaxCacheSize)
-                return (null, false);
+            {
+                lock (mLock)
+                    fileCache.UpdatedTime = DateTime.UtcNow;
+                Log.Info($"Load '{Path.GetFileName(path)}' - No cache");
+                return fileCache;
+            }
 
             var startTime = DateTime.UtcNow;
-            var uncompressedFile = File.ReadAllBytes(fsPath);
+            var uncompressedFile = File.ReadAllBytes(fileCache.PathOs);
             var readTime = DateTime.UtcNow;
             if (isTemplate)
-                uncompressedFile = ProcessTemplate(fsPath, uncompressedFile);
+                uncompressedFile = ProcessTemplate(fileCache.PathOs, uncompressedFile);
             var templateTime = DateTime.UtcNow;
 
             // GZip for future reference
@@ -329,9 +361,9 @@ namespace Gosub.Web
                 if (compressedStream.Length < uncompressedFile.Length)
                     compressedFile = compressedStream.ToArray();
             }
+
+            // Log file compression info
             var compressTime = DateTime.UtcNow;
-
-
             var compressRatio = "";
             if (compressedFile != null && uncompressedFile.Length != 0)
                 compressRatio = $" ({(uncompressedFile.Length-compressedFile.Length) * 100 / uncompressedFile.Length}%)";
@@ -339,17 +371,14 @@ namespace Gosub.Web
                     + (isTemplate ? $", templated in {(int)(templateTime - readTime).TotalMilliseconds} ms" : "")
                     + (isCompressable ? $", compressed{compressRatio} in {(int)(compressTime-templateTime).TotalMilliseconds} ms" : ""));
 
-            var fc = new FileCache();
-            fc.PathLower = path;
-            fc.Cached = uncompressedFile;
-            fc.CachedGzip = compressedFile;
-            fc.LastWriteTimeUtc = fi.LastWriteTimeUtc;
             lock (mLock)
-                mFileCache[pathLower] = fc;
-
-            if (allowGzip && compressedFile != null)
-                return (compressedFile, true);
-            return (uncompressedFile, false);
+            {
+                fileCache.Cached = uncompressedFile;
+                fileCache.CachedGzip = compressedFile;
+                fileCache.LastWriteTimeUtc = fi.LastWriteTime;
+                fileCache.UpdatedTime = DateTime.Now;
+            }
+            return fileCache;
         }
 
         /// <summary>

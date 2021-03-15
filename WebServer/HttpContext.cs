@@ -12,7 +12,6 @@ namespace Gosub.Web
     {
         public const int HTTP_HEADER_MAX_SIZE = 16000;
 
-        TcpClient mTcpClient;
         HttpReader mReader;
         HttpWriter mWriter;
         HttpRequest mRequest;
@@ -22,18 +21,17 @@ namespace Gosub.Web
 
         public HttpRequest Request => mRequest;
         public HttpResponse Response => mResponse;
-        public EndPoint RemoteEndPoint => mTcpClient.Client.RemoteEndPoint;
-        public EndPoint LocalEndPoint => mTcpClient.Client.LocalEndPoint;
+        public EndPoint RemoteEndPoint => mReader.RemoteEndPoint;
+        public EndPoint LocalEndPoint => mReader.LocalEndPoint;
 
         /// <summary>
         /// Created only by  HttpServer
         /// </summary>
-        internal HttpContext(TcpClient client, HttpReader reader, HttpWriter writer, bool isSecure)
+        internal HttpContext(HttpReader reader, HttpWriter writer)
         {
-            mTcpClient = client;
             mReader = reader;
             mWriter = writer;
-            IsSecure = isSecure;
+            IsSecure = reader.IsSecure;
         }
 
         /// <summary>
@@ -92,7 +90,6 @@ namespace Gosub.Web
             if (mWebSocket != null)
                 throw new HttpServerException("Websocket connection was already accepted");
 
-            mTcpClient.NoDelay = true;
             mWebSocket = new WebSocket(this, protocol);
             return mWebSocket;
         }
@@ -119,8 +116,7 @@ namespace Gosub.Web
 
             // Good to go, reset streams
             var header = Encoding.UTF8.GetBytes(Response.Generate());
-            mReader.PositionInternal = 0;
-            mReader.LengthInternal = Math.Max(0, mRequest.ContentLength);
+            mReader.SetLengthPosition(Math.Max(0, mRequest.ContentLength), 0);
             mWriter.PositionInternal = -header.Length; // Write position measures content output length
             mWriter.LengthInternal = Math.Max(0, mResponse.ContentLength);
 

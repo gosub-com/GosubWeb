@@ -23,6 +23,7 @@ namespace Gosub.Web
         /// Path of request excluding query
         /// </summary>
         public string Path = "";
+        public string PathLower = "";
 
         /// <summary>
         /// File extension excluding ".", lower case.
@@ -33,6 +34,7 @@ namespace Gosub.Web
         public string Host = "";
         public string HostNoPort = "";
         public string Connection = "";
+        public string Referer = "";
 
         
         public string Fragment = "";
@@ -68,18 +70,27 @@ namespace Gosub.Web
             var request = new HttpRequest();
             request.ReceiveDate = DateTime.Now;
 
+            for (int i = 0; i < buffer.Count; i++)
+            {
+                int ch = buffer[i];
+                if (ch < ' ' && ch != 10 && ch != 13)
+                    throw new HttpProtocolException($"HTTP header contains control character, {ch}");
+                if (ch > '~')
+                    throw new HttpProtocolException($"HTTP header contains UTF-8 character, {ch}");
+            }
+
             var header = Encoding.UTF8.GetString(buffer.Array, buffer.Offset, buffer.Count).Split(new string[] { "\r\n" }, StringSplitOptions.RemoveEmptyEntries);
             if (header.Length == 0)
-                throw new HttpProtocolException("Invalid request: Empty");
+                throw new HttpProtocolException("HTTP header is empty");
 
             var headerParts = header[0].Split(' ');
             if (headerParts.Length != 3)
-                throw new HttpProtocolException("Invalid request line: Needs 3 parts separated by space");
+                throw new HttpProtocolException("HTTP request line needs 3 parts separated by space");
 
             // Parse method
             request.Method = headerParts[0];
             if (!sMethods.ContainsKey(request.Method))
-                throw new HttpProtocolException("Invalid request line: unknown method");
+                throw new HttpProtocolException("HTTP request has unknown method");
 
             // Parse URL Fragment
             var target = headerParts[1];
@@ -97,12 +108,13 @@ namespace Gosub.Web
                 target = target.Substring(0, queryIndex);
                 ParseQueryString(query, request.Query);
             }
-            // Leading and trailing '/' (TBD: Make it faster later)
+            // Remove leading and trailing '/'
             while (target.EndsWith("/"))
                 target = target.Substring(0, target.Length - 1);
             while (target.StartsWith("/"))
                 target = target.Substring(1);
             request.Path = target;
+            request.PathLower = target.ToLower();
 
             request.Extension = "";
             int extensionIndex = target.LastIndexOf('.');
@@ -112,16 +124,16 @@ namespace Gosub.Web
             // Parse protocol and version
             var protocolParts = headerParts[2].Split('/');
             if (protocolParts.Length != 2 || protocolParts[0].ToUpper() != "HTTP")
-                throw new HttpProtocolException("Invalid request line: Unrecognized protocol.  Only HTTP is supported");
+                throw new HttpProtocolException("HTTP request line has unrecognized protocol.  Only HTTP is supported");
 
             var versionParts = protocolParts[1].Split('.');
             if (versionParts.Length != 2
                     || !int.TryParse(versionParts[0], out request.ProtocolVersionMajor)
                     || !int.TryParse(versionParts[1], out request.ProtocolVersionMinor))
-                throw new HttpProtocolException("Invalid request line: Protocol version format is incorrect (require #.#)");
+                throw new HttpProtocolException("HTTP header has invalid protocol version format, expecting #.#");
 
             if (request.ProtocolVersionMajor != 1)
-                throw new HttpProtocolException("Expecting HTTP version 1.#");
+                throw new HttpProtocolException("HTTP header version is incorrect, expecting 1.#");
 
             // Read header fields
             var headers = request.Headers;
@@ -131,19 +143,20 @@ namespace Gosub.Web
 
                 int index;
                 if ((index = fieldLine.IndexOf(':')) < 0)
-                    throw new HttpProtocolException("Invalid header field: Missing ':'");
+                    throw new HttpProtocolException("HTTP header field missing ':'");
 
                 var key = fieldLine.Substring(0, index).Trim().ToLower();
                 var value = fieldLine.Substring(index + 1).Trim();
 
                 switch (key)
                 {
-                    case "": throw new HttpProtocolException("Invalid header field: Missing key or value");
+                    case "": throw new HttpProtocolException("HTTP header field missing key or value");
                     case "cookie": ParseCookie(value, request.Cookies);  break;
                     case "host": request.Host = value;  break;
                     case "accept-encoding":  request.AcceptEncoding = value.ToLower();  break;
                     case "content-length": long.TryParse(value, out request.ContentLength);  break;
                     case "connection": request.Connection = value.ToLower(); break;
+                    case "referer": request.Referer = value;  break;
                     default: headers[key] = value;  break;
                 }
             }

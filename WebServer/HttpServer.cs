@@ -15,14 +15,14 @@ namespace Gosub.Web
 {
     public struct HttpStats
     {
-        public DateTime Time;
-        public long Connects;
+        public DateTime CurrentTime;
+        public int TcpAlive;
+        public int Buffers;
+        public long TcpEverConnected;
         public long Hits;
-        public long WaitingForRequest;
-        public long ServingHttp;
-        public long ServingWs;
-        public long InvalidProtocol;
-        public long InvalidHeaders;
+        public long Waiting;
+        public long ServingHttpBody;
+        public long ServingWebsockets;
     }
 
     /// <summary>
@@ -35,8 +35,10 @@ namespace Gosub.Web
         object mLock = new object();
         HashSet<TcpListener> mListeners = new HashSet<TcpListener>();
         CancellationToken mCancellationToken = CancellationToken.None; // TBD: Implement cancellation token
-
         HttpStats mStats;
+
+        // They carry a big buffer, so re-use them
+        Stack<HttpReader> mReaders = new Stack<HttpReader>();
 
         public HttpServer()
         {
@@ -48,7 +50,9 @@ namespace Gosub.Web
         /// <summary>
         /// NOTE: Assuming we are on 64 bit machine with 64 bit CLR, values should not tear.
         /// </summary>
-        public HttpStats Stats { get { var t = mStats;  t.Time = DateTime.Now;  return t; } }
+        public HttpStats Stats { get { var t = mStats;  t.CurrentTime = DateTime.Now;  return t; } }
+
+        public int MaxConnections = 10000;
 
         /// <summary>
         /// Start server on this listener (ssl if certificate is not null)
@@ -69,8 +73,7 @@ namespace Gosub.Web
                 while (true)
                 {
                     var client = await listener.AcceptTcpClientAsync();
-                    Interlocked.Increment(ref mStats.Connects);
-                    TryProcessRequestsAsync(client, certificate);
+                    TryProcessConnectionAsync(client, certificate);
                 }
             }
             catch (Exception ex)
@@ -94,41 +97,59 @@ namespace Gosub.Web
             }
         }
 
-        async void TryProcessRequestsAsync(TcpClient client, X509Certificate certificate)
+        async void TryProcessConnectionAsync(TcpClient client, X509Certificate certificate)
         {
-            using (client)
+            HttpReader reader;
+            lock (mLock)
             {
-                HttpContext context = null;
+                // Quick exit when overloaded
+                if (mStats.TcpAlive > MaxConnections)
+                {
+                    try { client.GetStream().Close(); } catch { }
+                    try { client.Close(); } catch { }
+                    return;
+                }
+
+                if (mReaders.Count != 0)
+                    reader = mReaders.Pop();
+                else
+                    reader = new HttpReader();
+                mStats.Buffers = mReaders.Count;
+                mStats.TcpAlive++;
+                mStats.TcpEverConnected++;
+            }
+
+            HttpContext context = null;
+            try
+            {
+                var stream = await reader.StartConnectionAsync(client, certificate, mCancellationToken).ConfigureAwait(false);
+                if (stream == null)
+                    return;
+
+                // Process requests on this possibly persistent TCP stream
+                var writer = new HttpWriter(stream, mCancellationToken);
+                context = new HttpContext(reader, writer);
+                await ProcessRequests(context, reader, writer).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
                 try
                 {
-                    // Setup stream or SSL stream
-                    client.NoDelay = true;
-                    var tcpStream = (Stream)client.GetStream();
-                    bool isSecure = false;
-                    if (certificate != null)
-                    {
-                        // Wrap stream in an SSL stream, and authenticate
-                        var sslStream = new SslStream(tcpStream, false);
-                        await sslStream.AuthenticateAsServerAsync(certificate);
-                        tcpStream = sslStream;
-                        isSecure = true;
-                    }
-                    // Process requests on this possibly persistent TCP stream
-                    var reader = new HttpReader(tcpStream, mCancellationToken);
-                    var writer = new HttpWriter(tcpStream, mCancellationToken);
-                    context = new HttpContext(client, reader, writer, isSecure);
-                    await ProcessRequests(context, reader, writer).ConfigureAwait(false);
+                    await ProcessExceptionAsync(context, ex).ConfigureAwait(false);
                 }
-                catch (Exception ex)
+                catch (Exception doubleFaultEx)
                 {
-                    try
-                    {
-                        await ProcessExceptionAsync(context, ex);
-                    }
-                    catch (Exception doubleFaultEx)
-                    {
-                        Log.Error($"DOUBLE FAULT EXCEPTION: {doubleFaultEx.Message}", doubleFaultEx);
-                    }
+                    Log.Error($"DOUBLE FAULT EXCEPTION: {doubleFaultEx.Message}", doubleFaultEx);
+                }
+            }
+            finally
+            {
+                try { reader.Close(); } catch { Log.Error("Close reader"); }
+                lock (mLock)
+                {
+                    mReaders.Push(reader);
+                    mStats.TcpAlive--;
+                    mStats.Buffers = mReaders.Count;
                 }
             }
         }
@@ -140,8 +161,20 @@ namespace Gosub.Web
         {
             do
             {
-                if (!await ReadHeader(context, reader))
-                    return; // Failed header means we need to close the connection
+                try
+                {
+                    Interlocked.Increment(ref mStats.Waiting);
+                    var httpRequest = await reader.ReadHeaderAsync().ConfigureAwait(false);
+                    if (httpRequest == null)
+                    {
+                        return; // Failed header, close connection don't even respond
+                    }
+                    context.SetRequestInternal(httpRequest, new HttpResponse());
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref mStats.Waiting);
+                }
 
                 await ProcessBody(context, writer).ConfigureAwait(false);
 
@@ -150,69 +183,24 @@ namespace Gosub.Web
                 var request = context.Request;
                 var isWebsocket = request.IsWebSocketRequest;
                 if (!response.HeaderSent)
-                    throw new HttpServerException("Request handler did not send a response for: " + context.Request.Path);
+                    throw new HttpServerException("Request handler did not send a response for: " + request.Path);
                 if (!isWebsocket && reader.Position != request.ContentLength && request.ContentLength >= 0)
-                    throw new HttpServerException("Request handler did not read correct number of bytes: " + request.Path);
+                    throw new HttpServerException($"Request handler did not read correct number of bytes: '{request.Path}', "
+                                                  + $"content-length={request.ContentLength}, position={reader.Position}, "
+                                                  + $"method='{context.Request.Method}', ip={context.RemoteEndPoint}");
                 if (!isWebsocket && writer.Position != response.ContentLength)
                     throw new HttpServerException("Request handler did not write correct number of bytes: " + request.Path);
             } while (!context.Request.IsWebSocketRequest && context.Response.Connection == "keep-alive");
         }
 
-        /// <summary>
-        /// If the HTTP header is valid, sets the context's request field and
-        /// returns TRUE.  Otherwise, returns FALSE, and the connection must
-        /// be closed.
-        /// </summary>
-        async Task<bool> ReadHeader(HttpContext context, HttpReader reader)
-        {
-            Interlocked.Increment(ref mStats.WaitingForRequest);
-            try
-            {
-                // Read header
-                var buffer = await reader.ScanHttpHeaderAsyncInternal();
-                reader.PositionInternal = 0;
-                reader.LengthInternal = HttpContext.HTTP_HEADER_MAX_SIZE;
-                if (buffer.Count == 0)
-                {
-                    if (reader.InvalidProtocol)
-                        Interlocked.Increment(ref mStats.InvalidProtocol);
-                    return false;  // Don't even bother responding
-                }
-
-                // Parse header
-                var httpRequest = HttpRequest.Parse(buffer);
-                context.SetRequestInternal(httpRequest, new HttpResponse());
-            }
-            catch (HttpProtocolException exp)
-            {
-                Interlocked.Increment(ref mStats.InvalidHeaders);
-                Log.Debug($"Invalid HTTP header, error='{exp.Message}'");
-                try { await context.SendResponseAsync(exp.Message, 400); }
-                catch { }
-                return false; // Close connection
-            }
-            catch (Exception ex)
-            {
-                Interlocked.Increment(ref mStats.InvalidHeaders);
-                Log.Error($"Exception while processing HTTP header, error='{ex.Message}'", ex);
-                try { await context.SendResponseAsync("Error processing HTTP header", 500); }
-                catch { }
-                return false; // Close connection
-            }
-            finally
-            {
-                Interlocked.Decrement(ref mStats.WaitingForRequest);
-            }
-            return true;
-        }
 
         async Task ProcessBody(HttpContext context, HttpWriter writer)
         {
             // Handle body
             if (context.Request.IsWebSocketRequest)
-                Interlocked.Increment(ref mStats.ServingWs);
+                Interlocked.Increment(ref mStats.ServingWebsockets);
             else
-                Interlocked.Increment(ref mStats.ServingHttp);
+                Interlocked.Increment(ref mStats.ServingHttpBody);
             try
             {
                 // Process HTTP request
@@ -223,7 +211,12 @@ namespace Gosub.Web
                 await writer.FlushAsync();
                 Interlocked.Increment(ref mStats.Hits);
             }
-            catch (HttpServerException ex) when (!context.Response.HeaderSent)
+            catch (HttpProtocolException)
+            {
+                // Protocol exceptions kills the connection
+                throw;
+            }
+            catch (Exception ex) when (!context.Response.HeaderSent)
             {
                 // Keep the persistent connection open since the response wasn't sent
                 await ProcessExceptionAsync(context, ex);
@@ -232,9 +225,9 @@ namespace Gosub.Web
             finally
             {
                 if (context.Request.IsWebSocketRequest)
-                    Interlocked.Decrement(ref mStats.ServingWs);
+                    Interlocked.Decrement(ref mStats.ServingWebsockets);
                 else
-                    Interlocked.Decrement(ref mStats.ServingHttp);
+                    Interlocked.Decrement(ref mStats.ServingHttpBody);
             }
         }
 
@@ -254,7 +247,7 @@ namespace Gosub.Web
             var message = "Server error";
             if (ex is HttpProtocolException protoEx)
             {
-                // Protocol failure, show error to client
+                // Protocol failure, show error to client (if possible)
                 code = protoEx.Code;
                 message = protoEx.Message;
                 Log.Debug(protoEx.Message);

@@ -15,8 +15,9 @@ namespace GosubAdmin
     class Program
     {
         static readonly string PUBLIC_DIRECTORY = Path.Combine(AppContext.BaseDirectory, "www");
-        static readonly string CERTIFICATE_PEM_FILE = "certificate.pem";
-        static readonly string CERTIFICATE_KEY_FILE = "certificate.key";
+        static readonly string REDIRECTS_FILE_NAME = Path.Combine(AppContext.BaseDirectory, "redirects.txt");
+        static readonly string PEM_FILE_NAME = Path.Combine(AppContext.BaseDirectory, "fullchain.pem");
+        static readonly string KEY_FILE_NAME = Path.Combine(AppContext.BaseDirectory, "privatekey.pem");
         const int ADMIN_PORT = 8059;
 
         static async Task Main(string[] args)
@@ -29,10 +30,9 @@ namespace GosubAdmin
 
             var staticFileServer = new StaticFileServer();
             staticFileServer.SetRoot(PUBLIC_DIRECTORY, "");
-            var adminApi = new AdminApi();
 
             var redirect = new Redirect();
-            //redirect.UpgradeInsecure = true;
+            ProcessRedirectsFile(redirect);
 
             // Setup server
             var mHttpServer = new HttpServer();
@@ -52,9 +52,14 @@ namespace GosubAdmin
                     await context.SendResponseAsync(JsonConvert.SerializeObject(mHttpServer.Stats));
                     return;
                 }
+                if (context.Request.Path == "admin/api/files")
+                {
+                    await context.SendResponseAsync(staticFileServer.GetLog());
+                    return;
+                }
 
                 // Pass everything else to static file server
-                await staticFileServer.SendStaticFile(context);
+                await staticFileServer.SendFile(context);
             };
 
             // Start HTTP ports
@@ -64,21 +69,43 @@ namespace GosubAdmin
             // Start HTTPS ports
             try
             {
-                var pem = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, CERTIFICATE_PEM_FILE));
-                var key = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, CERTIFICATE_KEY_FILE));
+                var pem = File.ReadAllText(PEM_FILE_NAME);
+                var key = File.ReadAllText(KEY_FILE_NAME);
                 var tlsCertificate = X509Certificate2.CreateFromPem(pem, key);
                 Start(mHttpServer, new TcpListener(IPAddress.Any, 8058), tlsCertificate);
                 Start(mHttpServer, new TcpListener(IPAddress.Any, 443), tlsCertificate);
+
+                // Send all HTTP requests to HTTPS
+                redirect.UpgradeInsecure = true;
             }
             catch (Exception ex)
             {
-                Log.Error($"Error loading TLS certificate, will not start HTTPS servers: {ex.Message}");
+                Log.Error($"ERROR loading TLS certificate, will not start HTTPS servers: {ex.Message}");
             }
 
             if (startBrowser)
                 Process.Start(new ProcessStartInfo($"http://localhost:{ADMIN_PORT}") { UseShellExecute = true });
 
             await Task.Delay(Timeout.Infinite);
+        }
+
+        private static void ProcessRedirectsFile(Redirect redirect)
+        {
+            try
+            {
+                foreach (var line in File.ReadAllLines(REDIRECTS_FILE_NAME))
+                {
+                    var fileNames = line.Split(" ");
+                    if (fileNames.Length == 2)
+                        redirect.Add(fileNames[0], fileNames[1]);
+                    else
+                        Console.WriteLine($"Error processing redirect file line: '{line}'");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"ERROR processing redirects:{ex.Message}");
+            }
         }
 
         static async void Start(HttpServer server, TcpListener listener, X509Certificate2 cert = null)

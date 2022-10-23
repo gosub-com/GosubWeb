@@ -1,0 +1,14 @@
+﻿Jeremy/Resume /JeremyResume
+Zenix3d/Music.htm /Zenix3d#music
+Zenix3d/Music /Zenix3d#music
+Zenix3d/Art.htm /Zenix3d#art
+Zenix3d/Art /Zenix3d#art
+Zenix3d/YourLevels.htm /Zenix3d#create
+Zenix3d/Strategy.htm /Zenix3d#strategy
+Zenix3d/Help /Zenix3d#help
+wp-content/uploads/2018/05/SetupZenix3d-1.3.2.exe /GosubFiles/SetupZenix3d-1.3.2.exe
+Coco/History /CocoHistory
+wp-content/uploads/2018/11/ZenixAndCrystalCity-2.zip /GosubFiles/ZenixAndCrystalCity-2.zip
+OpenSource/DirectXControl/DirectXControl.htm /
+wp-content/uploads/2018/11/SetupOpenViewtop-1.0.3.exe /GosubFiles/SetupOpenViewtop-1.0.3.exe
+Jeremy/CocoVideoGames.htm /Coco

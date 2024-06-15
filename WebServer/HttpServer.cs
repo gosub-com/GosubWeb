@@ -10,19 +10,20 @@ using System.Diagnostics;
 using System.IO;
 using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
+using System.Text.Json.Serialization;
 
 namespace Gosub.Web
 {
     public struct HttpStats
     {
-        public DateTime CurrentTime;
-        public int TcpAlive;
-        public int Buffers;
-        public long TcpEverConnected;
-        public long Hits;
-        public long Waiting;
-        public long ServingHttpBody;
-        public long ServingWebsockets;
+        public DateTime CurrentTime { get; set; }
+        public int TcpAlive { get; set; }
+        public int Buffers {  get; set; }
+        public long TcpEverConnected { get; set; }
+        public long Hits {  get; set; }
+        public long Waiting {  get; set; }
+        public long ServingHttpBody {  get; set; }
+        public long ServingWebsockets {  get; set; }
     }
 
     /// <summary>
@@ -35,7 +36,14 @@ namespace Gosub.Web
         object mLock = new object();
         HashSet<TcpListener> mListeners = new HashSet<TcpListener>();
         CancellationToken mCancellationToken = CancellationToken.None; // TBD: Implement cancellation token
-        HttpStats mStats;
+
+        static int sTcpAlive;
+        static int sBuffers;
+        static long sTcpEverConnected;
+        static long sHits;
+        static long sWaiting;
+        static long sServingHttpBody;
+        static long sServingWebsockets;
 
         // They carry a big buffer, so re-use them
         Stack<HttpReader> mReaders = new Stack<HttpReader>();
@@ -50,7 +58,17 @@ namespace Gosub.Web
         /// <summary>
         /// NOTE: Assuming we are on 64 bit machine with 64 bit CLR, values should not tear.
         /// </summary>
-        public HttpStats Stats { get { var t = mStats;  t.CurrentTime = DateTime.Now;  return t; } }
+        public HttpStats Stats => new HttpStats() 
+        { 
+            CurrentTime = DateTime.UtcNow,
+            TcpAlive = sTcpAlive,
+            Buffers = sBuffers,
+            TcpEverConnected = sTcpEverConnected,
+            Hits = sHits,
+            Waiting = sWaiting,
+            ServingHttpBody = sServingHttpBody,
+            ServingWebsockets = sServingWebsockets
+        };
 
         public int MaxConnections = 10000;
 
@@ -103,7 +121,7 @@ namespace Gosub.Web
             lock (mLock)
             {
                 // Quick exit when overloaded
-                if (mStats.TcpAlive > MaxConnections)
+                if (sTcpAlive > MaxConnections)
                 {
                     try { client.GetStream().Close(); } catch { }
                     try { client.Close(); } catch { }
@@ -114,9 +132,9 @@ namespace Gosub.Web
                     reader = mReaders.Pop();
                 else
                     reader = new HttpReader();
-                mStats.Buffers = mReaders.Count;
-                mStats.TcpAlive++;
-                mStats.TcpEverConnected++;
+                sBuffers = mReaders.Count;
+                sTcpAlive++;
+                sTcpEverConnected++;
             }
 
             HttpContext context = null;
@@ -148,8 +166,8 @@ namespace Gosub.Web
                 lock (mLock)
                 {
                     mReaders.Push(reader);
-                    mStats.TcpAlive--;
-                    mStats.Buffers = mReaders.Count;
+                    sTcpAlive--;
+                    sBuffers = mReaders.Count;
                 }
             }
         }
@@ -163,7 +181,7 @@ namespace Gosub.Web
             {
                 try
                 {
-                    Interlocked.Increment(ref mStats.Waiting);
+                    Interlocked.Increment(ref sWaiting);
                     var httpRequest = await reader.ReadHeaderAsync().ConfigureAwait(false);
                     if (httpRequest == null)
                     {
@@ -173,7 +191,7 @@ namespace Gosub.Web
                 }
                 finally
                 {
-                    Interlocked.Decrement(ref mStats.Waiting);
+                    Interlocked.Decrement(ref sWaiting);
                 }
 
                 await ProcessBody(context, writer).ConfigureAwait(false);
@@ -198,9 +216,9 @@ namespace Gosub.Web
         {
             // Handle body
             if (context.Request.IsWebSocketRequest)
-                Interlocked.Increment(ref mStats.ServingWebsockets);
+                Interlocked.Increment(ref sServingWebsockets);
             else
-                Interlocked.Increment(ref mStats.ServingHttpBody);
+                Interlocked.Increment(ref sServingHttpBody);
             try
             {
                 // Process HTTP request
@@ -209,7 +227,7 @@ namespace Gosub.Web
                     throw new HttpServerException("HTTP request handler not installed");
                 await handler(context).ConfigureAwait(false);
                 await writer.FlushAsync();
-                Interlocked.Increment(ref mStats.Hits);
+                Interlocked.Increment(ref sHits);
             }
             catch (HttpProtocolException)
             {
@@ -225,9 +243,9 @@ namespace Gosub.Web
             finally
             {
                 if (context.Request.IsWebSocketRequest)
-                    Interlocked.Decrement(ref mStats.ServingWebsockets);
+                    Interlocked.Decrement(ref sServingWebsockets);
                 else
-                    Interlocked.Decrement(ref mStats.ServingHttpBody);
+                    Interlocked.Decrement(ref sServingHttpBody);
             }
         }
 

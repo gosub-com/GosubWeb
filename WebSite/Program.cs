@@ -6,14 +6,17 @@ using System.IO;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
-using Gosub.Web;
-using Newtonsoft.Json;
 using System.Security.Cryptography.X509Certificates;
+using System.Text.Json;
+
+using Gosub.Web;
 
 namespace GosubAdmin
 {
     class Program
     {
+        static string VERSION = "0.0.5";
+
         static readonly string PUBLIC_DIRECTORY = Path.Combine(AppContext.BaseDirectory, "www");
         static readonly string REDIRECTS_FILE_NAME = Path.Combine(AppContext.BaseDirectory, "redirects.txt");
         static readonly string PEM_FILE_NAME = Path.Combine(AppContext.BaseDirectory, "fullchain.pem");
@@ -22,7 +25,7 @@ namespace GosubAdmin
 
         static async Task Main(string[] args)
         {
-            Log.Info("Starting application");
+            Log.Info($"Starting Gosub Web Server, version {VERSION}");
             bool startBrowser = false;
             foreach (var v in args)
                 if (v == "--start-browser")
@@ -32,7 +35,7 @@ namespace GosubAdmin
             staticFileServer.SetRoot(PUBLIC_DIRECTORY, "");
 
             var redirect = new Redirect();
-            ProcessRedirectsFile(redirect);
+            AddRedirectsFile(redirect);
 
             // Setup server
             var mHttpServer = new HttpServer();
@@ -49,7 +52,7 @@ namespace GosubAdmin
                 }
                 if (context.Request.Path == "admin/api/stats")
                 {
-                    await context.SendResponseAsync(JsonConvert.SerializeObject(mHttpServer.Stats));
+                    await context.SendResponseAsync(JsonSerializer.Serialize(mHttpServer.Stats));
                     return;
                 }
                 if (context.Request.Path == "admin/api/files")
@@ -57,6 +60,10 @@ namespace GosubAdmin
                     await context.SendResponseAsync(staticFileServer.GetLog());
                     return;
                 }
+
+                // Allow godot games to use shared buffer array
+                context.Response.Headers["Cross-Origin-Opener-Policy"] = "same-origin";
+                context.Response.Headers["Cross-Origin-Embedder-Policy"] = "require-corp";
 
                 // Pass everything else to static file server
                 await staticFileServer.SendFile(context);
@@ -69,6 +76,9 @@ namespace GosubAdmin
             // Start HTTPS ports
             try
             {
+                if (!File.Exists(PEM_FILE_NAME) || !File.Exists(KEY_FILE_NAME))
+                    throw new Exception($"Certificate files not found.  Expecting to find '{PEM_FILE_NAME}' and '{KEY_FILE_NAME}'");
+
                 var pem = File.ReadAllText(PEM_FILE_NAME);
                 var key = File.ReadAllText(KEY_FILE_NAME);
                 var tlsCertificate = X509Certificate2.CreateFromPem(pem, key);
@@ -80,7 +90,7 @@ namespace GosubAdmin
             }
             catch (Exception ex)
             {
-                Log.Error($"ERROR loading TLS certificate, will not start HTTPS servers: {ex.Message}");
+                Log.Error($"Can't start HTTPS servers: {ex.Message}");
             }
 
             if (startBrowser)
@@ -89,7 +99,7 @@ namespace GosubAdmin
             await Task.Delay(Timeout.Infinite);
         }
 
-        private static void ProcessRedirectsFile(Redirect redirect)
+        private static void AddRedirectsFile(Redirect redirect)
         {
             try
             {

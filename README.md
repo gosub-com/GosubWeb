@@ -18,7 +18,7 @@ Go to [Digital Ocean](https://www.digitalocean.com/products/droplets) and
 setup an Ubuntu server with a static IP address.  Point your domain to the
 server.
 
-From Visual Studio, open the *GousbWeb* solution, then select the *WebSite*
+From Visual Studio, open the *GosubWeb* solution, then select the *WebSite*
 project, and publish it with *Build...Publish...*.  Make sure the
 *Target Runtime* matches the server archtecture.  Use `lscpu` on the
 server, so if it says `Architecture: x86_64`, publish to `linux-x64`.
@@ -49,7 +49,7 @@ web site root (i.e. `cd www`), do the following:
 
 	sudo certbot certonly --webroot -d your-domain.com
 	cp /etc/letsencrypt/live/your-domain.com/fullchain.pem ../fullchain.pem
-	cp  /etc/letsencrypt/live/your-domain.com/privkey.pem ../privatekey.pem
+	cp /etc/letsencrypt/live/your-domain.com/privkey.pem ../privatekey.pem
 
 Note that you will need to look at the output of the `certbot` command and
 to find the exact URL to use, (e.g. it could be 

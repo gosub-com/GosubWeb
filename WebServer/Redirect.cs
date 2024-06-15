@@ -29,12 +29,21 @@ namespace Gosub.Web
         public void Add(string source, string dest)
         {
             // TBD: Add to validation
-            if (source.Length == 0 || source[0] == '/' || source[source.Length - 1] == '/')
-                throw new Exception($"Invalid source redirect: '{source}'");
+            if (source.Length != 0)
+            {
+                if (source[0] == '/' || source[source.Length - 1] == '/')
+                    throw new Exception($"Invalid source redirect: '{source}'");
+            }
             if (dest.Length == 0 || dest[0] != '/')
                 throw new Exception($"Invalid destination redirect: {dest}");
             lock (mLock)
                 mRedirects[source.ToLower()] = dest;
+        }
+
+        public void Remove(string source)
+        {
+            lock (mLock)
+                mRedirects.Remove(source.ToLower());
         }
 
         public void Add(Dictionary<string, string> redirects)

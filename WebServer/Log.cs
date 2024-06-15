@@ -19,7 +19,12 @@ namespace Gosub.Web
         /// <summary>
         /// Use Level to index
         /// </summary>
-        static readonly string[] LevelNames = new string[] { "DEBUG", " INFO", "ERROR" };
+        static readonly string[] LevelNames = ["DEBUG", " INFO", "ERROR"];
+
+        /// <summary>
+        /// Strip private parts of file name
+        /// </summary>
+        static readonly int SourcePathRootLength;
 
         public enum Level
         {
@@ -40,7 +45,20 @@ namespace Gosub.Web
 
         static Log()
         {
-            Info("*** STARTING LOG ***");
+            SourcePathRootLength = GetSourcePathRootLength();
+            Console.WriteLine();
+            Info("", null, 0);
+            Info("*** STARTING LOG ***", null, 0, "", "");
+            Info("", null, 0);
+        }
+
+        static int GetSourcePathRootLength([CallerFilePath] string filePath = "")
+        {
+            // Strip enough to get to root of project
+            filePath = Path.GetDirectoryName(filePath.Replace("\\", "/"));
+            filePath = Path.GetDirectoryName(filePath);
+            filePath = Path.GetDirectoryName(filePath);
+            return filePath.Length + 1;
         }
 
         /// <summary>
@@ -85,7 +103,7 @@ namespace Gosub.Web
         {
             message = $"{DateTime.Now.ToString("yyyy-MM-dd, HH:mm:ss.fff")}, {LevelNames[(int)level]}: {message}";
             if (lineNumber > 0)
-                message += $" [{Path.GetFileName(fileName)}: {lineNumber}, {memberName}]";
+                message += $" [{fileName.Substring(SourcePathRootLength)}:{lineNumber}, {memberName}]";
             if (exception != null)
                 message += $", \"{exception.Message}\", {exception.GetType().Name}, STACK {exception.StackTrace}";
             Add(level, message);

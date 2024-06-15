@@ -258,7 +258,6 @@ namespace Gosub.Web
             var allowGzip = compressions.Contains("gzip");
             var allowBrotli = compressions.Contains("br");
 
-
             var (fileData, compression, extension) 
                 = GetFileFromCache(path, allowGzip, allowBrotli);
 
@@ -268,6 +267,8 @@ namespace Gosub.Web
                 await context.SendResponseAsync($"File not found: '{path}'", 404);
                 return;
             }
+
+
             if (MimeTypes.TryGetValue(extension, out string contentType))
                 context.Response.ContentType = contentType;
 
@@ -391,18 +392,18 @@ namespace Gosub.Web
                 using (var gz = new GZipStream(compressedStream, CompressionMode.Compress, true))
                     gz.Write(uncompressedFile, 0, uncompressedFile.Length);
                 if (compressedStream.Length < uncompressedFile.Length)
-                    compressedFile = compressedStream.ToArray();
-
-                lock (mLock)
                 {
-                    mFileCache[httpPath + ".gz"] = new FileCache()
+                    lock (mLock)
                     {
-                        PathHttp = httpPath + ".gz",
-                        PathFull = fullPath,
-                        Extension = extension,
-                        LastWriteTimeUtc = fi.LastWriteTimeUtc,
-                        Data = compressedFile
-                    };
+                        mFileCache[httpPath + ".gz"] = new FileCache()
+                        {
+                            PathHttp = httpPath + ".gz",
+                            PathFull = fullPath,
+                            Extension = extension,
+                            LastWriteTimeUtc = fi.LastWriteTimeUtc,
+                            Data = compressedStream.ToArray()
+                        };
+                    }
                 }
             }
             var compressTime = DateTime.Now - compressStartTime;
